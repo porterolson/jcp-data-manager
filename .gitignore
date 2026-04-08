@@ -1,0 +1,98 @@
+# ========================
+# JSON files
+# ========================
+*.json
+
+# keep example configs if desired
+!config.example.json
+
+# ========================
+# Python
+# ========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# virtual environments
+.venv/
+venv/
+env/
+
+# ========================
+# Data files
+# ========================
+*.csv
+*.parquet
+*.feather
+*.h5
+*.hdf5
+*.npy
+*.npz
+
+# ========================
+# Model files
+# ========================
+*.pkl
+*.joblib
+*.pt
+*.pth
+
+# ========================
+# Logs
+# ========================
+*.log
+logs/
+
+# ========================
+# Environment variables / secrets
+# ========================
+.env
+.env.*
+
+# ========================
+# Jupyter
+# ========================
+.ipynb_checkpoints/
+
+# ========================
+# IDE settings
+# ========================
+.vscode/
+.idea/
+
+# ========================
+# OS files
+# ========================
+.DS_Store
+Thumbs.db
+
+# ========================
+# Temporary files
+# ========================
+tmp/
+temp/
+*.tmp
+
+# ========================
+# SLURM / HPC (useful for cluster runs)
+# ========================
+slurm-*.out
+*.err
+*.out
+
+# ========================
+# Ray / distributed compute
+# ========================
+ray_results/
+
+# ========================
+# Cache
+# ========================
+.cache/
+build/
+dist/
+*.egg-info/
+
+#### PICTURES
+*.jpg
+*.png
