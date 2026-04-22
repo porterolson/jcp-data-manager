@@ -1,4 +1,4 @@
-"""Core merge logic extracted from the notebook."""
+"""Core normalization logic extracted from the notebook."""
 
 from __future__ import annotations
 
@@ -6,20 +6,10 @@ from pathlib import Path
 
 import polars as pl
 
-from .io import load_linkedin_data, load_sessions_data
+from .io import load_sessions_data
 
 
-LINKEDIN_RENAME_MAP = {
-    "wordpress_user_id": "user_id",
-    "last_synced_at": "account_last_synced_at",
-    "token_expires_at": "linkedin_token_expires_at",
-    "ip_history": "linkedin_ip_history",
-    "profile_data": "linkedin_profile_data",
-}
-
-LINKEDIN_DROP_COLUMNS = ["wordpress_display_name"]
-SESSIONS_REQUIRED_COLUMNS = {"user_id", "session_id"}
-LINKEDIN_USER_ID_CANDIDATES = ("wordpress_user_id", "user_id")
+NORMALIZED_SESSION_REQUIRED_COLUMNS = {"session_id", "user_id"}
 
 
 def expand_struct(df: pl.DataFrame, column_name: str) -> pl.DataFrame:
@@ -52,34 +42,27 @@ def expand_list_struct_drop_inner(df: pl.DataFrame, column_name: str) -> pl.Data
     )
 
 
-def normalize_linkedin_data(df: pl.DataFrame) -> pl.DataFrame:
-    rename_map = {old: new for old, new in LINKEDIN_RENAME_MAP.items() if old in df.columns}
-    normalized = df.rename(rename_map)
-
-    if "user_id" in normalized.columns:
-        normalized = normalized.with_columns(pl.col("user_id").cast(pl.Utf8))
-
-    drop_columns = [column for column in LINKEDIN_DROP_COLUMNS if column in normalized.columns]
-    if drop_columns:
-        normalized = normalized.select(pl.exclude(drop_columns))
-
-    return normalized
+def drop_columns_if_present(df: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
+    present = [column for column in columns if column in df.columns]
+    if not present:
+        return df
+    return df.select(pl.exclude(present))
 
 
-def validate_sessions_data(df: pl.DataFrame) -> None:
-    missing = sorted(SESSIONS_REQUIRED_COLUMNS - set(df.columns))
-    if missing:
+def validate_raw_sessions_data(df: pl.DataFrame) -> None:
+    if "session" not in df.columns and not NORMALIZED_SESSION_REQUIRED_COLUMNS.issubset(df.columns):
         raise ValueError(
-            "Session data is missing required columns: "
-            f"{missing}. Expected the JSON under 'sessions' to include at least {sorted(SESSIONS_REQUIRED_COLUMNS)}."
+            "Session data must contain either a nested 'session' struct or top-level "
+            f"{sorted(NORMALIZED_SESSION_REQUIRED_COLUMNS)} columns."
         )
 
 
-def validate_linkedin_data(df: pl.DataFrame) -> None:
-    if not any(column in df.columns for column in LINKEDIN_USER_ID_CANDIDATES):
+def validate_normalized_sessions_data(df: pl.DataFrame) -> None:
+    missing = sorted(NORMALIZED_SESSION_REQUIRED_COLUMNS - set(df.columns))
+    if missing:
         raise ValueError(
-            "LinkedIn data is missing a user id column. "
-            "Expected either 'wordpress_user_id' or 'user_id'."
+            "Normalized session data is missing required columns: "
+            f"{missing}."
         )
 
 
@@ -105,22 +88,39 @@ def assert_unique_key(df: pl.DataFrame, key: str) -> None:
         raise ValueError(f"Column '{key}' is not unique. Example duplicate keys: {preview}")
 
 
-def merge_user_data(linkedin: str | Path, sessions: str | Path) -> pl.DataFrame:
+def normalize_sessions_export(df: pl.DataFrame) -> pl.DataFrame:
+    validate_raw_sessions_data(df)
+
+    normalized = expand_struct(df, "session")
+    normalized = expand_list_struct_drop_inner(normalized, "linkedin_rows")
+    normalized = expand_struct(normalized, "profile_data")
+    normalized = expand_list_struct_drop_inner(normalized, "job_survey_rows")
+    normalized = drop_columns_if_present(normalized, ["session", "profile_data"])
+
+    cast_columns: list[pl.Expr] = []
+    if "user_id" in normalized.columns:
+        cast_columns.append(pl.col("user_id").cast(pl.Utf8))
+    if "session_id" in normalized.columns:
+        cast_columns.append(pl.col("session_id").cast(pl.Utf8))
+    if "survey_id" in normalized.columns:
+        cast_columns.append(pl.col("survey_id").cast(pl.Utf8))
+
+    if cast_columns:
+        normalized = normalized.with_columns(cast_columns)
+
+    validate_normalized_sessions_data(normalized)
+    normalized = build_session_survey_id(normalized)
+    assert_unique_key(normalized, "session_survey_id")
+
+    return normalized
+
+
+def prepare_sessions_data(sessions: str | Path) -> pl.DataFrame:
     sessions_df = load_sessions_data(sessions)
-    linkedin_raw_df = load_linkedin_data(linkedin)
+    return normalize_sessions_export(sessions_df)
 
-    validate_sessions_data(sessions_df)
-    validate_linkedin_data(linkedin_raw_df)
 
-    linkedin_df = normalize_linkedin_data(linkedin_raw_df)
+def merge_user_data(sessions: str | Path, linkedin: str | Path | None = None) -> pl.DataFrame:
+    """Backward-compatible alias for the old API name."""
 
-    if "user_id" in sessions_df.columns:
-        sessions_df = sessions_df.with_columns(pl.col("user_id").cast(pl.Utf8))
-
-    merged = sessions_df.join(linkedin_df, on=["user_id"], how="left")
-    merged = expand_struct(merged, "linkedin_profile_data")
-    merged = expand_list_struct_drop_inner(merged, "treatment_snapshot")
-    merged = build_session_survey_id(merged)
-    assert_unique_key(merged, "session_survey_id")
-
-    return merged
+    return prepare_sessions_data(sessions)

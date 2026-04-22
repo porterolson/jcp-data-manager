@@ -1,48 +1,197 @@
 # jcp-data-manager
 
-Package for merging JCP session data with JCP LinkedIn members.
+CLI toolkit for JCP data cleaning, job posting, and job expiration checks.
 
 ## What it does
 
-- Loads LinkedIn member JSON data
-- Loads session JSON data
-- Normalizes and merges both datasets on `user_id`
-- By default, enriches rows with image-based DeepFace analysis
-- By default, enriches rows with name-based gender and ethnicity predictions
+- Takes JCP data and cleans (only slightly) the JSON export
+- By default, for signed in users, runs name and facial analysis to get demographic data
+- Auto-posts to WordPress
+- Checks existing WordPress drafts for dead or soft-404 source links and can move invalid posts to private
 
-## Expected input shapes
 
-The LinkedIn file should be a top-level JSON list of member records and must include either `wordpress_user_id` or `user_id`.
 
-The sessions file should be a top-level JSON object with a `sessions` key whose value is a list. Each session record must include at least `user_id` and `session_id`.
+## Usage
+There are two main methods of usage:
+1. pip install the package (choose this if you are unsure)
+2. clone the repo (do this if you want to develop further the `jcp-data-manager`)
 
 ## Install
+Using pip: `pip install jcp-data-manager`
+
+For development: `git clone https://github.com/porterolson/jcp-data-manager.git`
+
+## Configuration
+
+To use the `jcp-data-manager` you need to configure some environment variables. 
+
+The variables are:
 
 ```bash
-pip install jcp-data-manager
+WORDPRESS_BASE_URL
+WORDPRESS_USERNAME
+WORDPRESS_APP_PASSWORD
+WORDPRESS_FEATURED_MEDIA_ID
+GITHUB_MODELS_TOKEN
+GITHUB_MODELS_ENDPOINT
+GITHUB_MODELS_MODEL
+GEMINI_API_KEY
+GEMINI_MODEL
 ```
 
-This installs the merge pipeline and the default image and name analysis dependencies.
+There are a couple of ways to set the environment variables, however the easiest is:
+```bash
+import os
+
+os.environ["WORDPRESS_BASE_URL"] = "https://jobconnectionsproject.org/"
+os.environ["WORDPRESS_USERNAME"] = "your-wp-username"
+os.environ["WORDPRESS_APP_PASSWORD"] = "your-app-password"
+os.environ["WORDPRESS_FEATURED_MEDIA_ID"] = "1807"
+
+os.environ["GITHUB_MODELS_TOKEN"] = "your-github-models-token"
+os.environ["GITHUB_MODELS_ENDPOINT"] = "https://models.github.ai/inference"
+os.environ["GITHUB_MODELS_MODEL"] = "openai/gpt-4.1-mini"
+
+os.environ["GEMINI_API_KEY"] = "your-gemini-api-key"
+os.environ["GEMINI_MODEL"] = "gemini-2.5-flash-lite"
+```
+
+Below in the `Appendix` one can see how to get wp-username, wp-password, and tokens for the models along with caveats about model availability.
+
+Additionally, the   environment variables can also be read from a `.env` file; however, this is primarily used for development. Once cloning the repo, one can consult `.env.example` to see how an `.env` file needs to be structured.
 
 
-## Example usage
+You can also point the CLI at a specific env file:
 
 ```bash
-pip install jcp-data-manager
+jcp-data-manager get-jobs --env-file /path/to/.env --occupation-title "Graphic Designer" --date-posted 04/21/2026 --location "Seattle, WA"
 ```
+
+## Commands
+
+### Cleaning Sessions Export JSON
+
+The sessions file should be a top-level JSON object with a `sessions` key whose value is a list.
+
+Example usage:
+```bash
+jcp-data-manager clean-json-data --sessions /content/jcpst-sessions-2026-04-21-17-27-55.json --output cleaned.parquet
+```
+
+where `--sessions` points to your `.json` file.
+
+
+### Job scraping and posting
+
+This command scrapes jobs, filters for qualification text, asks GitHub Models to format the posting HTML, saves the output dataset, and then posts WordPress drafts. **Note the posting script is not perfect and will need a human (RA)  to go thru the posts and check/clean them up before publishing**
+
+Example Usage:
 
 ```bash
-jcp-data-manager --sessions /content/jcpst-sessions-2026-04-07-22-48-30.json --linkedin /content/linkedin-member-data-2026-04-07-224846.json --output merged.parquet
+jcp-data-manager get-jobs --occupation-title "Graphic Designer" --date-posted 04/21/2026 --location "Seattle, WA"
+```
+Note that `--date-posted MM/DD/YYYY` is the earliest that you want the scraper/poster to look for jobs. For example, if today was `4/22/2026` and I supplied `--date-posted 4/7/2026`, then the automatic poster would look for jobs with the given title and location from April 7th to today (the 22nd).
+
+_Further note that the day does not need to be zero padded (i.e. both `04/07/2026` and `4/7/2026` will work)_
+
+By default, the job CLI command posts with the LinkedIn sign-in popup flow. To post without a linkedin sign in popup, use the flag `--no-linkedin` to switch to the non-LinkedIn post template:
+
+Lastly, use the `--skip-post` flag which skips the posting step. Use this flag if you only want the scraped and generated output file without creating WordPress drafts.
+
+### Expiration checking
+
+This command inspects WordPress posts, fetches each footnote URL, asks Gemini for a soft-404 probability, and by default changes invalid posts to `private`.
+
+```bash
+jcp-data-manager check-job-expiration --status draft --output invalid-posts.csv
 ```
 
+Use `--skip-private` if you want the report without updating WordPress post status.
 
-## Project layout
 
-```text
-src/jcp_data_manager/
-  __init__.py
-  cli.py
-  enrichment.py
-  io.py
-  merge.py
+## Setting up Dev Repo
+If you chose to clone the repo use `git`, then you will also need `uv` for the environment
+
+### Installing UV
+For PowerShell (Windows):
+```bash
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
+
+For Mac/Linux:
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+### Initalization
+
+Then run `uv sync`
+
+Add any subsequent packages with `uv add [PACKAGE NAME]` and then run `uv sync` again.
+
+UV Docs can be accessed at `https://docs.astral.sh/uv/`
+
+## (Appendix)
+
+------------
+#### (A.1) Getting Wordpress Username and Password
+Start by emailing `Dr. Eastmond` and asking to be made an admin on Wordpress. This is the website building software we use to host and edit the JCP website, so you need access to be able to post job ads, remove job ads, edit website content, and access the data we collect.
+
+If you don’t already have a Wordpress account, you’ll have to make one. It’s probably best to create it using your google account.
+
+Once you have an account and are an admin, goto `https://jobconnectionsproject.org/wp-admin/index.php`
+
+**ONCE AGAIN, DO NOT RUN THE UPDATER!!**
+
+On the side menu goto `Users → Profile`
+
+Scroll down to the bottom until you see this:
+<img width="1698" height="571" alt="image" src="https://github.com/user-attachments/assets/608db582-e5c7-4ddd-ab67-e916b5366a48" />
+
+Enter a new name for you application password (NOTE: this is not your username).
+
+Click `Add Application Password`, make sure to save/write down the password Wordpress then generates for you, this is your `APP_PASSWORD`. Your `USERNAME` is simply your wordpress username (not the name of application password you just entered)
+
+Put these in the scripts and you are ready to use Wordpress API!
+
+----------
+
+#### (A.2) Getting GitHub Models Token
+
+_NOTE: GitHub may change access to older models (i.e. gpt 4.1-mini), if this model is no longer available, the following instrucitons will still help you generate a GitHub models token. Further, you can change `GITHUB_MODELS_MODEL` to some other model._
+
+First, sttart by creating a GitHub account.
+
+Next goto `https://github.com/marketplace/models/azure-openai/gpt-4-1-mini`
+
+Click on "Use This Model"
+<img width="1917" height="937" alt="image" src="https://github.com/user-attachments/assets/b7e43b14-6883-4565-9160-c9d2555f6aa5" />
+
+Click "Create Personal Access Token"
+<img width="765" height="284" alt="image" src="https://github.com/user-attachments/assets/75ecf9e1-1f10-4bc7-9a44-a14567108381" />
+
+Leave all the settings at their default and pick an expiration date (your token will no longer work after this date), and then click `Generate Token` at the bottom of the page. This is your `GITHUB_MODELS_TOKEN`
+
+You are now ready to use GitHub Models!
+
+--------
+#### (A.3) Getting Gemeni Token
+
+_NOTE: As of making this Google's models have much higher input token limit, so I use Gemeni models to look at html of pages to determine soft 404 errors. I do not use GitHub because Azure limits input tokens to ~8000; if someone is feeling ambitious, one future change may be to rewrite the code so that we only need to use one model and one API KEY_
+
+_Also, Google may change access to their older models as well; if so change `GEMINI_MODEL` to a newer model_
+
+
+First, goto https://ai.google.dev/gemini-api/docs
+
+Click "Get API Key"
+<img width="1915" height="836" alt="image" src="https://github.com/user-attachments/assets/442ce9ea-15a4-4d74-a417-c4e3344f695d" />
+
+Sign in to your google account.
+
+Click on this:
+<img width="1918" height="515" alt="image" src="https://github.com/user-attachments/assets/e2777b93-855b-4e93-a204-3a8c7efbd410" />
+
+
+You are now ready to use Gemeni in your code!
+
+

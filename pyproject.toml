@@ -4,26 +4,50 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jcp-data-manager"
-version = "0.1.3"
-description = "Package for merging JCP session data with JCP LinkedIn members."
+version = "0.2.5"
+description = "CLI toolkit for JCP session enrichment, job posting, and job expiration checks."
 readme = "README.md"
 requires-python = ">=3.10"
+authors = [
+  {name = "Porter Olson"},
+]
+keywords = ["jcp", "jobs", "linkedin", "wordpress", "data"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: OS Independent",
+]
 dependencies = [
+  "azure-ai-inference",
+  "azure-core",
+  "beautifulsoup4>=4.12.0",
   "polars>=1.0.0",
   "requests>=2.31.0",
   "deepface>=0.0.93",
   "gender-guesser>=0.4.0",
   "ethnicolr>=0.18.4",
+  "google-genai",
   "pandas>=2.0.0",
+  "python-dotenv>=0.21.0",
+  "python-jobspy>=1.1.82",
 ]
 
-[project.optional-dependencies]
+[project.urls]
+Homepage = "https://github.com/porterolson/jcp-data-manager"
+Repository = "https://github.com/porterolson/jcp-data-manager"
+
+[dependency-groups]
 dev = [
   "pytest>=8.0.0",
 ]
 
 [project.scripts]
 jcp-data-manager = "jcp_data_manager.cli:main"
+
+[tool.uv]
+default-groups = ["dev"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

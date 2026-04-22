@@ -19,13 +19,6 @@ def _read_json(path: str | Path) -> Any:
         return json.load(handle)
 
 
-def load_linkedin_data(path: str | Path) -> pl.DataFrame:
-    payload = _read_json(path)
-    if not isinstance(payload, list):
-        raise ValueError("LinkedIn data must be a JSON list of member records.")
-    return pl.DataFrame(payload)
-
-
 def load_sessions_data(path: str | Path) -> pl.DataFrame:
     payload = _read_json(path)
     if not isinstance(payload, dict) or "sessions" not in payload:

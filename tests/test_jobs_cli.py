@@ -1,0 +1,212 @@
+from __future__ import annotations
+
+from datetime import datetime
+import pytest
+
+from jcp_data_manager.cli import build_parser
+from jcp_data_manager.config import (
+    GeminiSettings,
+    WordPressSettings,
+    load_environment,
+    load_gemini_settings,
+    load_github_models_settings,
+    load_wordpress_settings,
+)
+from jcp_data_manager.expiration import run_expiration_check
+from jcp_data_manager.jobs import calculate_hours_old, default_jobs_output_path
+from jcp_data_manager.job_templates import build_post_content
+
+
+def test_build_post_content_respects_linkedin_toggle() -> None:
+    with_linkedin = build_post_content(
+        google_script="<script>google</script>",
+        generated_html="<p>body</p>",
+        include_linkedin_popup=True,
+    )
+    without_linkedin = build_post_content(
+        google_script="<script>google</script>",
+        generated_html="<p>body</p>",
+        include_linkedin_popup=False,
+    )
+
+    assert "Sign in with LinkedIn" in with_linkedin
+    assert "Sign in with LinkedIn" not in without_linkedin
+    assert "randomizeTreat" in without_linkedin
+    assert "fetchJcpSessionId" in with_linkedin
+    assert "action: 'jcpst_get_session_id'" in with_linkedin
+    assert 'console.error("Failed to save survey row:", status, error);' in with_linkedin
+    assert "document.addEventListener(\"DOMContentLoaded\", randomizeTreat);" in with_linkedin
+    assert '<div id="jcp-login-overlay">' in without_linkedin
+    assert 'console.warn("Overlay elements missing");' in without_linkedin
+
+
+def test_default_jobs_output_path_matches_script_style() -> None:
+    output_path = default_jobs_output_path(
+        occupation_title="Graphic Designer",
+        location="Seattle, WA",
+        now=datetime(2026, 4, 21),
+    )
+
+    assert str(output_path) == "4-21-2026_graphic_designer_seattle,_wa_jobs.csv"
+
+
+def test_calculate_hours_old_is_non_negative() -> None:
+    hours_old = calculate_hours_old("04/21/2026", now=datetime(2026, 4, 20, 12, 0, 0))
+    assert hours_old == 0
+
+
+def test_load_environment_populates_required_settings(tmp_path, monkeypatch) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "WORDPRESS_BASE_URL=https://example.com",
+                "WORDPRESS_USERNAME=user1",
+                "WORDPRESS_APP_PASSWORD=pass1",
+                "WORDPRESS_FEATURED_MEDIA_ID=1807",
+                "GITHUB_MODELS_TOKEN=github-token",
+                "GEMINI_API_KEY=gemini-token",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    for key in [
+        "WORDPRESS_BASE_URL",
+        "WORDPRESS_USERNAME",
+        "WORDPRESS_APP_PASSWORD",
+        "WORDPRESS_FEATURED_MEDIA_ID",
+        "GITHUB_MODELS_TOKEN",
+        "GEMINI_API_KEY",
+        "GITHUB_MODELS_ENDPOINT",
+        "GITHUB_MODELS_MODEL",
+        "GEMINI_MODEL",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    load_environment(env_path)
+
+    wordpress = load_wordpress_settings()
+    github = load_github_models_settings()
+    gemini = load_gemini_settings()
+
+    assert wordpress.posts_endpoint == "https://example.com/wp-json/wp/v2/posts"
+    assert wordpress.featured_media_id == 1807
+    assert github.token == "github-token"
+    assert gemini.api_key == "gemini-token"
+
+
+def test_settings_can_load_from_shell_environment_without_dotenv(monkeypatch) -> None:
+    monkeypatch.setenv("WORDPRESS_BASE_URL", "https://example.com")
+    monkeypatch.setenv("WORDPRESS_USERNAME", "user1")
+    monkeypatch.setenv("WORDPRESS_APP_PASSWORD", "pass1")
+    monkeypatch.setenv("WORDPRESS_FEATURED_MEDIA_ID", "1807")
+    monkeypatch.setenv("GITHUB_MODELS_TOKEN", "github-token")
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-token")
+    monkeypatch.delenv("GITHUB_MODELS_ENDPOINT", raising=False)
+    monkeypatch.delenv("GITHUB_MODELS_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+
+    wordpress = load_wordpress_settings()
+    github = load_github_models_settings()
+    gemini = load_gemini_settings()
+
+    assert wordpress.posts_endpoint == "https://example.com/wp-json/wp/v2/posts"
+    assert wordpress.featured_media_id == 1807
+    assert github.token == "github-token"
+    assert gemini.api_key == "gemini-token"
+
+
+def test_cli_parser_accepts_get_jobs_no_linkedin_flag() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "get-jobs",
+            "--occupation-title",
+            "Graphic Designer",
+            "--date-posted",
+            "04/21/2026",
+            "--location",
+            "Seattle, WA",
+            "--no-linkedin",
+        ]
+    )
+
+    assert args.no_linkedin is True
+    assert args.command == "get-jobs"
+
+
+def test_cli_parser_accepts_clean_json_data_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "clean-json-data",
+            "--sessions",
+            "sessions.json",
+            "--output",
+            "merged.parquet",
+        ]
+    )
+
+    assert args.command == "clean-json-data"
+    assert args.sessions == "sessions.json"
+
+
+def test_top_level_help_lists_commands_and_command_help_hint(capsys) -> None:
+    parser = build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--help"])
+
+    help_text = capsys.readouterr().out
+    assert "clean-json-data" in help_text
+    assert "get-jobs" in help_text
+    assert "check-job-expiration" in help_text
+    assert "jcp-data-manager <command> --help" in help_text
+
+
+def test_old_legacy_usage_without_command_is_rejected() -> None:
+    parser = build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--sessions", "sessions.json", "--output", "merged.parquet"])
+
+
+def test_run_expiration_check_adds_probabilities_before_is_invalid(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration.fetch_wordpress_posts",
+        lambda settings, status="draft", per_page=100: [
+            {"id": 101, "meta": {"footnotes": "https://example.com/job"}},
+        ],
+    )
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration.fetch_footnote_metadata",
+        lambda df: df.with_columns(
+            pl.Series("response_code", [200]),
+            pl.Series("direct_url_html", ["<html>ok</html>"]),
+            pl.Series("request_error", [None]),
+        ),
+    )
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration.score_soft_404_probabilities",
+        lambda html_pages, settings: [0.25],
+    )
+
+    report = run_expiration_check(
+        wordpress_settings=WordPressSettings(
+            base_url="https://example.com",
+            username="user1",
+            app_password="pass1",
+            featured_media_id=1807,
+        ),
+        gemini_settings=GeminiSettings(
+            api_key="gemini-token",
+            model="gemini-2.5-flash-lite",
+        ),
+        privatize_invalid=False,
+    )
+
+    assert "prob_soft_404" in report.columns
+    assert "is_invalid" in report.columns
+    assert report["prob_soft_404"].to_list() == [0.25]
+    assert report["is_invalid"].to_list() == [0]
