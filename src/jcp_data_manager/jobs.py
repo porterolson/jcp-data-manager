@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import quote
 
 import polars as pl
 import requests
@@ -15,7 +16,7 @@ from requests.auth import HTTPBasicAuth
 
 from .config import GithubModelsSettings, WordPressSettings
 from .io import write_dataframe
-from .job_templates import JOB_DESCRIPTION_SYSTEM_PROMPT, build_post_content
+from .job_templates import build_job_description_system_prompt, build_post_content
 
 
 DEFAULT_JOB_SITES = ["indeed", "linkedin", "zip_recruiter", "google", "glassdoor"]
@@ -124,7 +125,35 @@ def _safe_text(value: object) -> str:
     return str(value)
 
 
-def generate_job_post_html(df: pl.DataFrame, settings: GithubModelsSettings) -> list[str]:
+def build_survey_url(original_ad_url: str) -> str:
+    return f"https://jobconnectionsproject.org/survey/?ad_url={quote(original_ad_url, safe='')}"
+
+
+def insert_survey_url_into_post_html(full_html: str, survey_url: str) -> str:
+    footer_text = (
+        "The Job Connections Project is a non-profit company that advertises open positions for other companies. "
+        "Please read the hiring company's job ad below, then click 'Continue'."
+    )
+    survey_cta_html = (
+        f"<p><a class=\"button-link\" href=\"{survey_url}\">Continue</a></p>"
+    )
+
+    updated_html = full_html.replace('href="https://jobconnectionsproject.org/survey/"', f'href="{survey_url}"')
+    updated_html = updated_html.replace("href='https://jobconnectionsproject.org/survey/'", f"href='{survey_url}'")
+    updated_html = updated_html.replace('href="/survey/"', f'href="{survey_url}"')
+    updated_html = updated_html.replace("href='/survey/'", f"href='{survey_url}'")
+    updated_html = updated_html.replace('action="https://jobconnectionsproject.org/survey/"', f'action="{survey_url}"')
+    updated_html = updated_html.replace("action='https://jobconnectionsproject.org/survey/'", f"action='{survey_url}'")
+    updated_html = updated_html.replace('action="/survey/"', f'action="{survey_url}"')
+    updated_html = updated_html.replace("action='/survey/'", f"action='{survey_url}'")
+
+    if survey_url not in updated_html:
+        updated_html = updated_html.replace(footer_text, f"{footer_text}\n\n{survey_cta_html}", 1)
+
+    return updated_html
+
+
+def generate_job_post_html(df: pl.DataFrame, settings: GithubModelsSettings, *, experiment: int) -> list[str]:
     if df.is_empty():
         return []
 
@@ -136,12 +165,13 @@ def generate_job_post_html(df: pl.DataFrame, settings: GithubModelsSettings) -> 
         endpoint=settings.endpoint,
         credential=AzureKeyCredential(settings.token),
     )
+    system_prompt = build_job_description_system_prompt(experiment)
 
     html_responses: list[str] = []
     for row in df.select(["description", "title", "location"]).iter_rows(named=True):
         response = client.complete(
             messages=[
-                SystemMessage(JOB_DESCRIPTION_SYSTEM_PROMPT),
+                SystemMessage(system_prompt),
                 UserMessage(
                     f"Here is the job title: {_safe_text(row['title'])},"
                     f"the location is {_safe_text(row['location'])},"
@@ -255,6 +285,7 @@ def post_jobs_to_wordpress(
     *,
     settings: WordPressSettings,
     include_linkedin_popup: bool,
+    experiment: int,
     status: str = "draft",
 ) -> pl.DataFrame:
     if df.is_empty():
@@ -270,11 +301,15 @@ def post_jobs_to_wordpress(
 
     rows = df.select(["title", "location", "google_ad_scripts", "jcp_job_html", "job_url_direct"]).iter_rows(named=True)
     for row in rows:
+        original_ad_url = _safe_text(row["job_url_direct"])
+        survey_url = build_survey_url(original_ad_url)
         full_html = build_post_content(
             google_script=_safe_text(row["google_ad_scripts"]),
             generated_html=_safe_text(row["jcp_job_html"]),
             include_linkedin_popup=include_linkedin_popup,
+            experiment=experiment,
         )
+        full_html = insert_survey_url_into_post_html(full_html, survey_url)
 
         payload = {
             "title": f"{_safe_text(row['title'])} - {_safe_text(row['location'])}",
@@ -282,7 +317,7 @@ def post_jobs_to_wordpress(
             "status": status,
             "featured_media": settings.featured_media_id,
             "meta": {
-                "footnotes": _safe_text(row["job_url_direct"]),
+                "footnotes": original_ad_url,
             },
         }
 
@@ -312,10 +347,13 @@ def run_job_posting_pipeline(
     output_path: str | Path | None = None,
     results_wanted: int = 20,
     include_linkedin_popup: bool = True,
+    experiment: int,
     skip_post: bool = False,
     keyword_timeout: int = 10,
     now: datetime | None = None,
 ) -> tuple[pl.DataFrame, Path]:
+    build_job_description_system_prompt(experiment)
+
     filtered_jobs = scrape_and_filter_jobs(
         occupation_title=occupation_title,
         date_posted=date_posted,
@@ -328,11 +366,12 @@ def run_job_posting_pipeline(
     if filtered_jobs.is_empty():
         final_df = filtered_jobs
     else:
-        html_responses = generate_job_post_html(filtered_jobs, github_settings)
+        html_responses = generate_job_post_html(filtered_jobs, github_settings, experiment=experiment)
         google_scripts = build_google_job_scripts(filtered_jobs, now=now)
         final_df = filtered_jobs.with_columns(
             pl.Series("jcp_job_html", html_responses),
             pl.Series("google_ad_scripts", google_scripts),
+            pl.lit(experiment).alias("experiment"),
         )
 
         if not skip_post:
@@ -342,6 +381,7 @@ def run_job_posting_pipeline(
                 final_df,
                 settings=wordpress_settings,
                 include_linkedin_popup=include_linkedin_popup,
+                experiment=experiment,
             )
 
     resolved_output = Path(output_path) if output_path else default_jobs_output_path(

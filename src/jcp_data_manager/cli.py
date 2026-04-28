@@ -55,6 +55,16 @@ def add_job_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--occupation-title", required=True, help="Occupation title to search for.")
     parser.add_argument("--date-posted", required=True, help="Earliest date posted in MM/DD/YYYY format.")
     parser.add_argument("--location", required=True, help="Location to search in.")
+    parser.add_argument(
+        "--experiment",
+        required=True,
+        type=int,
+        help=(
+            "Required experiment mode.\n"
+            "  0 = Non-experimental post with no treatment group and no treatment randomization.\n"
+            "  1 = Original treatment randomization flow."
+        ),
+    )
     parser.add_argument("--output", help="Optional output path. Defaults to the script-style CSV filename.")
     parser.add_argument("--env-file", help="Optional path to a .env file.")
     parser.add_argument("--results-wanted", type=int, default=20, help="Number of JobSpy results wanted.")
@@ -140,8 +150,11 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Scrape jobs, filter for qualifications, generate JCP-ready HTML, save the results,\n"
             "and optionally create WordPress drafts.\n\n"
+            "Experiments:\n"
+            "  0 = non-experimental; no treatment group and no treatment randomization.\n"
+            "  1 = current treatment randomization flow.\n\n"
             "Example:\n"
-            "  jcp-data-manager get-jobs --occupation-title \"Graphic Designer\" --date-posted 04/21/2026 --location \"Seattle, WA\""
+            "  jcp-data-manager get-jobs --occupation-title \"Graphic Designer\" --date-posted 04/21/2026 --location \"Seattle, WA\" --experiment 1"
         ),
         formatter_class=CliHelpFormatter,
     )
@@ -192,6 +205,7 @@ def handle_get_jobs_command(args: argparse.Namespace) -> None:
         output_path=args.output,
         results_wanted=args.results_wanted,
         include_linkedin_popup=not args.no_linkedin,
+        experiment=args.experiment,
         skip_post=args.skip_post,
         keyword_timeout=args.keyword_timeout,
     )

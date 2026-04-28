@@ -64,7 +64,7 @@ Additionally, the   environment variables can also be read from a `.env` file; h
 You can also point the CLI at a specific env file:
 
 ```bash
-jcp-data-manager get-jobs --env-file /path/to/.env --occupation-title "Graphic Designer" --date-posted 04/21/2026 --location "Seattle, WA"
+jcp-data-manager get-jobs --env-file /path/to/.env --occupation-title "Graphic Designer" --date-posted 04/21/2026 --location "Seattle, WA" --experiment 1
 ```
 
 ## Commands
@@ -88,13 +88,15 @@ This command scrapes jobs, filters for qualification text, asks GitHub Models to
 Example Usage:
 
 ```bash
-jcp-data-manager get-jobs --occupation-title "Graphic Designer" --date-posted 04/21/2026 --location "Seattle, WA"
+jcp-data-manager get-jobs --occupation-title "Graphic Designer" --date-posted 04/21/2026 --location "Seattle, WA" --experiment 1
 ```
 Note that `--date-posted MM/DD/YYYY` is the earliest that you want the scraper/poster to look for jobs. For example, if today was `4/22/2026` and I supplied `--date-posted 4/7/2026`, then the automatic poster would look for jobs with the given title and location from April 7th to today (the 22nd).
 
 _Further note that the day does not need to be zero padded (i.e. both `04/07/2026` and `4/7/2026` will work)_
 
-By default, the job CLI command posts with the LinkedIn sign-in popup flow. To post without a linkedin sign in popup, use the flag `--no-linkedin` to switch to the non-LinkedIn post template:
+By default, the job CLI command posts with the LinkedIn sign-in popup flow. To post without a linkedin sign in popup, use the flag `--no-linkedin` to switch to the non-LinkedIn post template.
+
+Next, the `--experiment` flag indicates which treatment to use. Essentially flagging posts as experimental or not. `--experiment 0` will get job postings and post without any treatment; `--experiment 1` will post with the default treament randomization.
 
 Lastly, use the `--skip-post` flag which skips the posting step. Use this flag if you only want the scraped and generated output file without creating WordPress drafts.
 

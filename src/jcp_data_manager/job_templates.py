@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-JOB_DESCRIPTION_SYSTEM_PROMPT = """
+BASE_JOB_DESCRIPTION_SYSTEM_PROMPT = """
 You are a professional technical editor and formatter.
 
 Your task is to take a raw job description and return a clean, well-structured HTML version of it.
@@ -24,6 +24,12 @@ Rules:
 - Assume all of this will be placed within a body tag, thus no need to include !DOCTYPE, html, or body tags
 
 If something is unclear or malformed, make the minimal correction needed to improve readability without changing intent.
+
+Return only the final HTML.
+""".strip()
+
+
+EXPERIMENT_1_JOB_DESCRIPTION_PROMPT_SUFFIX = """
 
 Lastly, in the HTML you return, under the list of job qualifications (which will almost always be a list: <ul></ul>) that are being posted incldue the following HTML:
 
@@ -48,8 +54,82 @@ Also note the following:
 Return only the final HTML.
 """.strip()
 
+GENERAL_POST_STYLES = """
+<style>
+body {
+    font-family: Arial, sans-serif;
+    font-size: 14px;
+}
+.button-link {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  text-decoration: none;
+  font-size: 18px;
+}
+.close-btn {
+    display: block;
+    font-size: 24px;
+    font-weight: bold;
+    cursor: pointer;
+    color: white;
+    background-color: black;
+    text-align: center;
+    padding: 5px;
+    width: 20px;
+    height: 20px;
+    line-height: 15px;
+    border-radius: 5pt;
+}
+.close-btn-container {
+    position: absolute;
+    top: 5%;
+    right: 5%;
+    z-index: 1010;
+}
+.popup-container {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+}
+.popup {
+    position: absolute;
+    top: 10%;
+    left: 10%;
+    width: 80%;
+    height: 80%;
+    background-color: white;
+    border-radius: 5px;
+    overflow: auto;
+    padding: 20px;
+    box-sizing: border-box;
+}
+.popup-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+.close-btn {
+    font-size: 24px;
+    font-weight: bold;
+    cursor: pointer;
+}
+.popup-content {
+    font-size: 16px;
+    line-height: 1.5;
+}
+</style>
+""".strip()
 
-COMMON_POST_BLOCK = """
+
+EXPERIMENT_1_POST_BLOCK = """
 <!-- wp:html -->
 <script>
 function fetchJcpSessionId() {
@@ -163,83 +243,22 @@ document.addEventListener("DOMContentLoaded", randomizeTreat);
     margin-bottom: 1em;
   }
 </style>
-<style>
-body {
-    font-family: Arial, sans-serif;
-    font-size: 14px;
-}
-.button-link {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  text-align: center;
-  text-decoration: none;
-  font-size: 18px;
-}
-.close-btn {
-    display: block;
-    font-size: 24px;
-    font-weight: bold;
-    cursor: pointer;
-    color: white;
-    background-color: black;
-    text-align: center;
-    padding: 5px;
-    width: 20px;
-    height: 20px;
-    line-height: 15px;
-    border-radius: 5pt;
-}
-.close-btn-container {
-    position: absolute;
-    top: 5%;
-    right: 5%;
-    z-index: 1010;
-}
-.popup-container {
-    display: none;
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0, 0, 0, 0.5);
-    z-index: 1000;
-}
-.popup {
-    position: absolute;
-    top: 10%;
-    left: 10%;
-    width: 80%;
-    height: 80%;
-    background-color: white;
-    border-radius: 5px;
-    overflow: auto;
-    padding: 20px;
-    box-sizing: border-box;
-}
-.popup-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 10px;
-}
-.close-btn {
-    font-size: 24px;
-    font-weight: bold;
-    cursor: pointer;
-}
-.popup-content {
-    font-size: 16px;
-    line-height: 1.5;
-}
-</style>
-""".strip()
+
+""" + GENERAL_POST_STYLES
+
+
+NON_EXPERIMENTAL_POST_BLOCK = GENERAL_POST_STYLES
 
 
 COMMON_POST_FOOTER = """
 The Job Connections Project is a non-profit company that advertises open positions for other companies. Please read the hiring company's job ad below, then click 'Continue'.
 """.strip()
+
+
+EXPERIMENT_POST_BLOCKS = {
+    0: NON_EXPERIMENTAL_POST_BLOCK,
+    1: EXPERIMENT_1_POST_BLOCK,
+}
 
 
 LINKEDIN_POPUP_BLOCK = """
@@ -605,7 +624,31 @@ def build_google_html_block(google_script: str) -> str:
 """.strip()
 
 
-def build_post_content(*, google_script: str, generated_html: str, include_linkedin_popup: bool) -> str:
+def build_job_description_system_prompt(experiment: int) -> str:
+    if experiment == 0:
+        return BASE_JOB_DESCRIPTION_SYSTEM_PROMPT
+    if experiment == 1:
+        return f"{BASE_JOB_DESCRIPTION_SYSTEM_PROMPT}\n\n{EXPERIMENT_1_JOB_DESCRIPTION_PROMPT_SUFFIX}"
+
+    raise ValueError(
+        f"Unsupported experiment value: {experiment}. Supported values are 0 (non-experimental) and 1 (current treatment randomization)."
+    )
+
+
+def build_post_content(
+    *,
+    google_script: str,
+    generated_html: str,
+    include_linkedin_popup: bool,
+    experiment: int,
+) -> str:
+    try:
+        experiment_block = EXPERIMENT_POST_BLOCKS[experiment]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unsupported experiment value: {experiment}. Supported values are 0 (non-experimental) and 1 (current treatment randomization)."
+        ) from exc
+
     popup_block = LINKEDIN_POPUP_BLOCK if include_linkedin_popup else NO_LINKEDIN_POPUP_BLOCK
-    base = f"{COMMON_POST_BLOCK}{popup_block}\n\n{COMMON_POST_FOOTER}"
+    base = f"{experiment_block}{popup_block}\n\n{COMMON_POST_FOOTER}"
     return f"{build_google_html_block(google_script)}\n\n{base}\n\n{generated_html.strip()}"

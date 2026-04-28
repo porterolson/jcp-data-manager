@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import polars as pl
 import pytest
 
 from jcp_data_manager.cli import build_parser
@@ -13,8 +14,13 @@ from jcp_data_manager.config import (
     load_wordpress_settings,
 )
 from jcp_data_manager.expiration import run_expiration_check
-from jcp_data_manager.jobs import calculate_hours_old, default_jobs_output_path
-from jcp_data_manager.job_templates import build_post_content
+from jcp_data_manager.jobs import (
+    build_survey_url,
+    calculate_hours_old,
+    default_jobs_output_path,
+    insert_survey_url_into_post_html,
+)
+from jcp_data_manager.job_templates import build_job_description_system_prompt, build_post_content
 
 
 def test_build_post_content_respects_linkedin_toggle() -> None:
@@ -22,11 +28,13 @@ def test_build_post_content_respects_linkedin_toggle() -> None:
         google_script="<script>google</script>",
         generated_html="<p>body</p>",
         include_linkedin_popup=True,
+        experiment=1,
     )
     without_linkedin = build_post_content(
         google_script="<script>google</script>",
         generated_html="<p>body</p>",
         include_linkedin_popup=False,
+        experiment=1,
     )
 
     assert "Sign in with LinkedIn" in with_linkedin
@@ -40,6 +48,41 @@ def test_build_post_content_respects_linkedin_toggle() -> None:
     assert 'console.warn("Overlay elements missing");' in without_linkedin
 
 
+def test_experiment_zero_has_no_treatment_prompt_or_randomization() -> None:
+    prompt = build_job_description_system_prompt(0)
+    post_content = build_post_content(
+        google_script="<script>google</script>",
+        generated_html="<p>body</p>",
+        include_linkedin_popup=True,
+        experiment=0,
+    )
+
+    assert "Treatment text" not in prompt
+    assert "randomizeTreat" not in post_content
+    assert "fetchJcpSessionId" not in post_content
+    assert "treatment_group" not in post_content
+    assert "Sign in with LinkedIn" in post_content
+
+
+def test_experiment_one_keeps_current_treatment_prompt() -> None:
+    prompt = build_job_description_system_prompt(1)
+    assert "Treatment text" in prompt
+    assert "treat4" in prompt
+
+
+def test_unsupported_experiment_value_is_rejected() -> None:
+    with pytest.raises(ValueError, match="Unsupported experiment value"):
+        build_job_description_system_prompt(9)
+
+    with pytest.raises(ValueError, match="Unsupported experiment value"):
+        build_post_content(
+            google_script="<script>google</script>",
+            generated_html="<p>body</p>",
+            include_linkedin_popup=True,
+            experiment=9,
+        )
+
+
 def test_default_jobs_output_path_matches_script_style() -> None:
     output_path = default_jobs_output_path(
         occupation_title="Graphic Designer",
@@ -48,6 +91,38 @@ def test_default_jobs_output_path_matches_script_style() -> None:
     )
 
     assert str(output_path) == "4-21-2026_graphic_designer_seattle,_wa_jobs.csv"
+
+
+def test_survey_url_is_encoded_and_replaces_multiple_links() -> None:
+    original_ad_url = "https://utah.peopleadmin.com/postings/200835"
+    survey_url = build_survey_url(original_ad_url)
+    html = """
+    <a href="https://jobconnectionsproject.org/survey/">Apply now</a>
+    <a href="/survey/">Continue</a>
+    <form action="/survey/"></form>
+    """.strip()
+
+    updated_html = insert_survey_url_into_post_html(html, survey_url)
+
+    assert survey_url == "https://jobconnectionsproject.org/survey/?ad_url=https%3A%2F%2Futah.peopleadmin.com%2Fpostings%2F200835"
+    assert 'href="https://jobconnectionsproject.org/survey/"' not in updated_html
+    assert 'href="/survey/"' not in updated_html
+    assert 'action="/survey/"' not in updated_html
+    assert updated_html.count(survey_url) == 3
+
+
+def test_survey_url_is_inserted_when_post_has_no_existing_survey_link() -> None:
+    survey_url = build_survey_url("https://example.com/original-job")
+    html = (
+        "The Job Connections Project is a non-profit company that advertises open positions for other companies. "
+        "Please read the hiring company's job ad below, then click 'Continue'."
+    )
+
+    updated_html = insert_survey_url_into_post_html(html, survey_url)
+
+    assert survey_url in updated_html
+    assert '<a class="button-link"' in updated_html
+    assert '>Continue</a>' in updated_html
 
 
 def test_calculate_hours_old_is_non_negative() -> None:
@@ -128,12 +203,32 @@ def test_cli_parser_accepts_get_jobs_no_linkedin_flag() -> None:
             "04/21/2026",
             "--location",
             "Seattle, WA",
+            "--experiment",
+            "1",
             "--no-linkedin",
         ]
     )
 
     assert args.no_linkedin is True
     assert args.command == "get-jobs"
+    assert args.experiment == 1
+
+
+def test_get_jobs_requires_experiment_flag() -> None:
+    parser = build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "get-jobs",
+                "--occupation-title",
+                "Graphic Designer",
+                "--date-posted",
+                "04/21/2026",
+                "--location",
+                "Seattle, WA",
+            ]
+        )
 
 
 def test_cli_parser_accepts_clean_json_data_command() -> None:
