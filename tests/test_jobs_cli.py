@@ -15,10 +15,14 @@ from jcp_data_manager.config import (
 )
 from jcp_data_manager.expiration import run_expiration_check
 from jcp_data_manager.jobs import (
+    build_wordpress_post_meta,
+    build_similar_jobs_survey_url,
     build_survey_url,
+    build_similar_jobs_url,
     calculate_hours_old,
     default_jobs_output_path,
-    insert_survey_url_into_post_html,
+    insert_navigation_urls_into_post_html,
+    _normalize_similar_jobs_term,
 )
 from jcp_data_manager.job_templates import build_job_description_system_prompt, build_post_content
 
@@ -96,33 +100,88 @@ def test_default_jobs_output_path_matches_script_style() -> None:
 def test_survey_url_is_encoded_and_replaces_multiple_links() -> None:
     original_ad_url = "https://utah.peopleadmin.com/postings/200835"
     survey_url = build_survey_url(original_ad_url)
+    similar_jobs_url = build_similar_jobs_url("software")
+    similar_jobs_survey_url = build_similar_jobs_survey_url(similar_jobs_url)
     html = """
     <a href="https://jobconnectionsproject.org/survey/">Apply now</a>
     <a href="/survey/">Continue</a>
     <form action="/survey/"></form>
+    <a class="elementor-button elementor-button-link elementor-size-sm" href="https://jobconnectionsproject.org/?s=software">
+      <span class="elementor-button-content-wrapper">
+        <span class="elementor-button-text">No longer interested, show me similar positions</span>
+      </span>
+    </a>
     """.strip()
 
-    updated_html = insert_survey_url_into_post_html(html, survey_url)
+    updated_html = insert_navigation_urls_into_post_html(html, survey_url, similar_jobs_url)
 
     assert survey_url == "https://jobconnectionsproject.org/survey/?ad_url=https%3A%2F%2Futah.peopleadmin.com%2Fpostings%2F200835"
     assert 'href="https://jobconnectionsproject.org/survey/"' not in updated_html
     assert 'href="/survey/"' not in updated_html
     assert 'action="/survey/"' not in updated_html
     assert updated_html.count(survey_url) == 3
+    assert similar_jobs_survey_url in updated_html
+    assert 'href="https://jobconnectionsproject.org/?s=software"' not in updated_html
+    assert "No longer interested, show me similar positions" in updated_html
 
 
-def test_survey_url_is_inserted_when_post_has_no_existing_survey_link() -> None:
+def test_wordpress_post_meta_contains_elementor_ready_urls() -> None:
+    original_ad_url = "https://utah.peopleadmin.com/postings/200835"
+    similar_jobs_url = "https://jobconnectionsproject.org/?s=software"
+
+    meta = build_wordpress_post_meta(original_ad_url, similar_jobs_url)
+
+    assert meta["footnotes"] == original_ad_url
+    assert meta["survey_url"] == (
+        "https://jobconnectionsproject.org/survey/?ad_url="
+        "https%3A%2F%2Futah.peopleadmin.com%2Fpostings%2F200835"
+    )
+    assert meta["similar_jobs_url"] == similar_jobs_url
+    assert meta["similar_jobs_survey_url"] == (
+        "https://jobconnectionsproject.org/survey1/?ad_url="
+        "https%3A%2F%2Fjobconnectionsproject.org%2F%3Fs%3Dsoftware"
+    )
+
+
+def test_similar_jobs_term_normalizer_allows_two_words() -> None:
+    normalized = _normalize_similar_jobs_term("software engineer", fallback="Software Engineer")
+    assert normalized == "software engineer"
+
+
+def test_similar_jobs_term_normalizer_unjams_fallback_title_words() -> None:
+    normalized = _normalize_similar_jobs_term("softwareengineer", fallback="Software Engineer")
+    assert normalized == "software engineer"
+
+
+def test_navigation_urls_are_not_injected_when_post_has_no_existing_links() -> None:
     survey_url = build_survey_url("https://example.com/original-job")
+    similar_jobs_url = build_similar_jobs_url("software")
     html = (
         "The Job Connections Project is a non-profit company that advertises open positions for other companies. "
         "Please read the hiring company's job ad below, then click 'Continue'."
     )
 
-    updated_html = insert_survey_url_into_post_html(html, survey_url)
+    updated_html = insert_navigation_urls_into_post_html(html, survey_url, similar_jobs_url)
 
-    assert survey_url in updated_html
-    assert '<a class="button-link"' in updated_html
-    assert '>Continue</a>' in updated_html
+    assert updated_html == html
+
+
+def test_similar_jobs_button_can_be_retargeted_through_survey1_placeholder() -> None:
+    survey_url = build_survey_url("https://example.com/original-job")
+    similar_jobs_url = build_similar_jobs_url("software")
+    similar_jobs_survey_url = build_similar_jobs_survey_url(similar_jobs_url)
+    html = """
+    <a class="elementor-button elementor-button-link elementor-size-sm" href="https://jobconnectionsproject.org/survey1/">
+      <span class="elementor-button-content-wrapper">
+        <span class="elementor-button-text">No longer interested, show me similar positions</span>
+      </span>
+    </a>
+    """.strip()
+
+    updated_html = insert_navigation_urls_into_post_html(html, survey_url, similar_jobs_url)
+
+    assert similar_jobs_survey_url in updated_html
+    assert 'href="https://jobconnectionsproject.org/survey1/"' not in updated_html
 
 
 def test_calculate_hours_old_is_non_negative() -> None:

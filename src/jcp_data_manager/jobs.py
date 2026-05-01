@@ -31,6 +31,29 @@ DEFAULT_KEYWORDS = [
     "what you'll bring",
 ]
 
+SIMILAR_JOBS_SYSTEM_PROMPT = """
+You assign a short search term for similar jobs.
+
+Your task is to read the job title, location, and job description and return a lowercase
+occupational search term that would be useful for searching for similar positions on a jobs site.
+
+Rules:
+- Return one or two words only
+- Use only letters, numbers, spaces, or hyphens if needed
+- Prefer a broad but relevant occupational term
+- Do not include punctuation, explanations, or extra text
+- Do not jam multiple words together to avoid the two-word limit
+
+Examples:
+- software
+- software engineer
+- nursing
+- human resources
+- accounting
+
+Return only the term.
+""".strip()
+
 
 def _slugify(value: str) -> str:
     return value.strip().lower().replace(" ", "_")
@@ -129,14 +152,38 @@ def build_survey_url(original_ad_url: str) -> str:
     return f"https://jobconnectionsproject.org/survey/?ad_url={quote(original_ad_url, safe='')}"
 
 
-def insert_survey_url_into_post_html(full_html: str, survey_url: str) -> str:
-    footer_text = (
-        "The Job Connections Project is a non-profit company that advertises open positions for other companies. "
-        "Please read the hiring company's job ad below, then click 'Continue'."
+def build_similar_jobs_url(similar_jobs_term: str) -> str:
+    return f"https://jobconnectionsproject.org/?s={quote(similar_jobs_term, safe='')}"
+
+
+def build_similar_jobs_survey_url(similar_jobs_url: str) -> str:
+    return f"https://jobconnectionsproject.org/survey1/?ad_url={quote(similar_jobs_url, safe='')}"
+
+
+def build_wordpress_post_meta(original_ad_url: str, similar_jobs_url: str) -> dict[str, str]:
+    survey_url = build_survey_url(original_ad_url)
+    similar_jobs_survey_url = build_similar_jobs_survey_url(similar_jobs_url)
+    return {
+        "footnotes": original_ad_url,
+        "survey_url": survey_url,
+        "similar_jobs_url": similar_jobs_url,
+        "similar_jobs_survey_url": similar_jobs_survey_url,
+    }
+
+
+def _replace_anchor_href_by_text(full_html: str, *, anchor_text: str, new_href: str) -> str:
+    pattern = re.compile(
+        r"(<a\b[^>]*\bhref=)([\"'])([^\"']*)(\2)([^>]*>(?:(?!</a>).)*?"
+        + re.escape(anchor_text)
+        + r"(?:(?!</a>).)*?</a>)",
+        re.IGNORECASE | re.DOTALL,
     )
-    survey_cta_html = (
-        f"<p><a class=\"button-link\" href=\"{survey_url}\">Continue</a></p>"
-    )
+
+    return pattern.sub(lambda match: f"{match.group(1)}{match.group(2)}{new_href}{match.group(2)}{match.group(5)}", full_html)
+
+
+def insert_navigation_urls_into_post_html(full_html: str, survey_url: str, similar_jobs_url: str) -> str:
+    similar_jobs_survey_url = build_similar_jobs_survey_url(similar_jobs_url)
 
     updated_html = full_html.replace('href="https://jobconnectionsproject.org/survey/"', f'href="{survey_url}"')
     updated_html = updated_html.replace("href='https://jobconnectionsproject.org/survey/'", f"href='{survey_url}'")
@@ -147,10 +194,53 @@ def insert_survey_url_into_post_html(full_html: str, survey_url: str) -> str:
     updated_html = updated_html.replace('action="/survey/"', f'action="{survey_url}"')
     updated_html = updated_html.replace("action='/survey/'", f"action='{survey_url}'")
 
-    if survey_url not in updated_html:
-        updated_html = updated_html.replace(footer_text, f"{footer_text}\n\n{survey_cta_html}", 1)
+    updated_html = updated_html.replace(
+        'href="https://jobconnectionsproject.org/survey1/"',
+        f'href="{similar_jobs_survey_url}"',
+    )
+    updated_html = updated_html.replace(
+        "href='https://jobconnectionsproject.org/survey1/'",
+        f"href='{similar_jobs_survey_url}'",
+    )
+    updated_html = updated_html.replace('href="/survey1/"', f'href="{similar_jobs_survey_url}"')
+    updated_html = updated_html.replace("href='/survey1/'", f"href='{similar_jobs_survey_url}'")
+    updated_html = updated_html.replace(
+        'href="https://jobconnectionsproject.org/?s="',
+        f'href="{similar_jobs_survey_url}"',
+    )
+    updated_html = updated_html.replace(
+        "href='https://jobconnectionsproject.org/?s='",
+        f"href='{similar_jobs_survey_url}'",
+    )
+    updated_html = _replace_anchor_href_by_text(
+        updated_html,
+        anchor_text="No longer interested, show me similar positions",
+        new_href=similar_jobs_survey_url,
+    )
 
     return updated_html
+
+
+def _normalize_similar_jobs_term(value: str, *, fallback: str) -> str:
+    matches = re.findall(r"[a-z0-9-]+", value.lower())
+    fallback_matches = re.findall(r"[a-z0-9-]+", fallback.lower())
+
+    if matches:
+        if len(matches) >= 2:
+            return " ".join(matches[:2])
+
+        normalized_value = re.sub(r"[^a-z0-9]", "", matches[0])
+        if len(fallback_matches) >= 2:
+            first_two_joined = "".join(fallback_matches[:2])
+            if normalized_value == first_two_joined:
+                return " ".join(fallback_matches[:2])
+
+        return matches[0]
+
+    if fallback_matches:
+        return " ".join(fallback_matches[:2])
+
+    return "jobs"
 
 
 def generate_job_post_html(df: pl.DataFrame, settings: GithubModelsSettings, *, experiment: int) -> list[str]:
@@ -183,6 +273,38 @@ def generate_job_post_html(df: pl.DataFrame, settings: GithubModelsSettings, *, 
         html_responses.append(response.choices[0].message.content)
 
     return html_responses
+
+
+def generate_similar_job_search_terms(df: pl.DataFrame, settings: GithubModelsSettings) -> list[str]:
+    if df.is_empty():
+        return []
+
+    from azure.ai.inference import ChatCompletionsClient
+    from azure.ai.inference.models import SystemMessage, UserMessage
+    from azure.core.credentials import AzureKeyCredential
+
+    client = ChatCompletionsClient(
+        endpoint=settings.endpoint,
+        credential=AzureKeyCredential(settings.token),
+    )
+
+    search_terms: list[str] = []
+    for row in df.select(["description", "title", "location"]).iter_rows(named=True):
+        response = client.complete(
+            messages=[
+                SystemMessage(SIMILAR_JOBS_SYSTEM_PROMPT),
+                UserMessage(
+                    f"Here is the job title: {_safe_text(row['title'])}, "
+                    f"the location is {_safe_text(row['location'])}, "
+                    f"and the job description is: {_safe_text(row['description'])}"
+                ),
+            ],
+            model=settings.model,
+        )
+        raw_term = _safe_text(response.choices[0].message.content)
+        search_terms.append(_normalize_similar_jobs_term(raw_term, fallback=_safe_text(row["title"])))
+
+    return search_terms
 
 
 def clean_description_hard(text: str | None) -> str:
@@ -299,26 +421,28 @@ def post_jobs_to_wordpress(
     results: list[dict[str, object]] = []
     auth = HTTPBasicAuth(settings.username, settings.app_password)
 
-    rows = df.select(["title", "location", "google_ad_scripts", "jcp_job_html", "job_url_direct"]).iter_rows(named=True)
+    rows = df.select(
+        ["title", "location", "google_ad_scripts", "jcp_job_html", "job_url_direct", "similar_jobs_url"]
+    ).iter_rows(named=True)
     for row in rows:
         original_ad_url = _safe_text(row["job_url_direct"])
         survey_url = build_survey_url(original_ad_url)
+        similar_jobs_url = _safe_text(row["similar_jobs_url"])
+        meta = build_wordpress_post_meta(original_ad_url, similar_jobs_url)
         full_html = build_post_content(
             google_script=_safe_text(row["google_ad_scripts"]),
             generated_html=_safe_text(row["jcp_job_html"]),
             include_linkedin_popup=include_linkedin_popup,
             experiment=experiment,
         )
-        full_html = insert_survey_url_into_post_html(full_html, survey_url)
+        full_html = insert_navigation_urls_into_post_html(full_html, survey_url, similar_jobs_url)
 
         payload = {
             "title": f"{_safe_text(row['title'])} - {_safe_text(row['location'])}",
             "content": full_html,
             "status": status,
             "featured_media": settings.featured_media_id,
-            "meta": {
-                "footnotes": original_ad_url,
-            },
+            "meta": meta,
         }
 
         response = requests.post(
@@ -367,9 +491,13 @@ def run_job_posting_pipeline(
         final_df = filtered_jobs
     else:
         html_responses = generate_job_post_html(filtered_jobs, github_settings, experiment=experiment)
+        similar_jobs_terms = generate_similar_job_search_terms(filtered_jobs, github_settings)
+        similar_jobs_urls = [build_similar_jobs_url(term) for term in similar_jobs_terms]
         google_scripts = build_google_job_scripts(filtered_jobs, now=now)
         final_df = filtered_jobs.with_columns(
             pl.Series("jcp_job_html", html_responses),
+            pl.Series("similar_jobs_term", similar_jobs_terms),
+            pl.Series("similar_jobs_url", similar_jobs_urls),
             pl.Series("google_ad_scripts", google_scripts),
             pl.lit(experiment).alias("experiment"),
         )
