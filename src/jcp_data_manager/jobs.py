@@ -54,6 +54,60 @@ Examples:
 Return only the term.
 """.strip()
 
+STATE_NAME_TO_ABBREVIATION = {
+    "alabama": "AL",
+    "alaska": "AK",
+    "arizona": "AZ",
+    "arkansas": "AR",
+    "california": "CA",
+    "colorado": "CO",
+    "connecticut": "CT",
+    "delaware": "DE",
+    "district of columbia": "DC",
+    "florida": "FL",
+    "georgia": "GA",
+    "hawaii": "HI",
+    "idaho": "ID",
+    "illinois": "IL",
+    "indiana": "IN",
+    "iowa": "IA",
+    "kansas": "KS",
+    "kentucky": "KY",
+    "louisiana": "LA",
+    "maine": "ME",
+    "maryland": "MD",
+    "massachusetts": "MA",
+    "michigan": "MI",
+    "minnesota": "MN",
+    "mississippi": "MS",
+    "missouri": "MO",
+    "montana": "MT",
+    "nebraska": "NE",
+    "nevada": "NV",
+    "new hampshire": "NH",
+    "new jersey": "NJ",
+    "new mexico": "NM",
+    "new york": "NY",
+    "north carolina": "NC",
+    "north dakota": "ND",
+    "ohio": "OH",
+    "oklahoma": "OK",
+    "oregon": "OR",
+    "pennsylvania": "PA",
+    "rhode island": "RI",
+    "south carolina": "SC",
+    "south dakota": "SD",
+    "tennessee": "TN",
+    "texas": "TX",
+    "utah": "UT",
+    "vermont": "VT",
+    "virginia": "VA",
+    "washington": "WA",
+    "west virginia": "WV",
+    "wisconsin": "WI",
+    "wyoming": "WY",
+}
+
 
 def _slugify(value: str) -> str:
     return value.strip().lower().replace(" ", "_")
@@ -152,8 +206,31 @@ def build_survey_url(original_ad_url: str) -> str:
     return f"https://jobconnectionsproject.org/survey/?ad_url={quote(original_ad_url, safe='')}"
 
 
-def build_similar_jobs_url(similar_jobs_term: str) -> str:
-    return f"https://jobconnectionsproject.org/?s={quote(similar_jobs_term, safe='')}"
+def extract_state_abbreviation(location: str) -> str | None:
+    parts = [part.strip() for part in location.split(",") if part and part.strip()]
+
+    for part in parts:
+        if re.fullmatch(r"[A-Za-z]{2}", part):
+            return part.upper()
+
+    for part in parts:
+        abbreviation = STATE_NAME_TO_ABBREVIATION.get(part.lower())
+        if abbreviation:
+            return abbreviation
+
+    return None
+
+
+def build_similar_jobs_query(similar_jobs_term: str, location: str) -> str:
+    normalized_term = re.sub(r"\s+", " ", similar_jobs_term).strip()
+    state_abbreviation = extract_state_abbreviation(location)
+    if state_abbreviation:
+        return f"{normalized_term} {state_abbreviation}"
+    return normalized_term
+
+
+def build_similar_jobs_url(similar_jobs_query: str) -> str:
+    return f"https://jobconnectionsproject.org/?s={quote(similar_jobs_query, safe='')}"
 
 
 def build_similar_jobs_survey_url(similar_jobs_url: str) -> str:
@@ -492,11 +569,18 @@ def run_job_posting_pipeline(
     else:
         html_responses = generate_job_post_html(filtered_jobs, github_settings, experiment=experiment)
         similar_jobs_terms = generate_similar_job_search_terms(filtered_jobs, github_settings)
-        similar_jobs_urls = [build_similar_jobs_url(term) for term in similar_jobs_terms]
+        similar_jobs_queries = [
+            build_similar_jobs_query(_safe_text(row["similar_jobs_term"]), _safe_text(row["location"]))
+            for row in filtered_jobs.with_columns(pl.Series("similar_jobs_term", similar_jobs_terms))
+            .select(["similar_jobs_term", "location"])
+            .iter_rows(named=True)
+        ]
+        similar_jobs_urls = [build_similar_jobs_url(query) for query in similar_jobs_queries]
         google_scripts = build_google_job_scripts(filtered_jobs, now=now)
         final_df = filtered_jobs.with_columns(
             pl.Series("jcp_job_html", html_responses),
             pl.Series("similar_jobs_term", similar_jobs_terms),
+            pl.Series("similar_jobs_query", similar_jobs_queries),
             pl.Series("similar_jobs_url", similar_jobs_urls),
             pl.Series("google_ad_scripts", google_scripts),
             pl.lit(experiment).alias("experiment"),

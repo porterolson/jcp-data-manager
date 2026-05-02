@@ -16,11 +16,13 @@ from jcp_data_manager.config import (
 from jcp_data_manager.expiration import run_expiration_check
 from jcp_data_manager.jobs import (
     build_wordpress_post_meta,
+    build_similar_jobs_query,
     build_similar_jobs_survey_url,
     build_survey_url,
     build_similar_jobs_url,
     calculate_hours_old,
     default_jobs_output_path,
+    extract_state_abbreviation,
     insert_navigation_urls_into_post_html,
     _normalize_similar_jobs_term,
 )
@@ -127,7 +129,7 @@ def test_survey_url_is_encoded_and_replaces_multiple_links() -> None:
 
 def test_wordpress_post_meta_contains_elementor_ready_urls() -> None:
     original_ad_url = "https://utah.peopleadmin.com/postings/200835"
-    similar_jobs_url = "https://jobconnectionsproject.org/?s=software"
+    similar_jobs_url = "https://jobconnectionsproject.org/?s=human%20resources%20TX"
 
     meta = build_wordpress_post_meta(original_ad_url, similar_jobs_url)
 
@@ -139,8 +141,16 @@ def test_wordpress_post_meta_contains_elementor_ready_urls() -> None:
     assert meta["similar_jobs_url"] == similar_jobs_url
     assert meta["similar_jobs_survey_url"] == (
         "https://jobconnectionsproject.org/survey1/?ad_url="
-        "https%3A%2F%2Fjobconnectionsproject.org%2F%3Fs%3Dsoftware"
+        "https%3A%2F%2Fjobconnectionsproject.org%2F%3Fs%3Dhuman%2520resources%2520TX"
     )
+
+
+def test_extract_state_abbreviation_from_abbreviated_location() -> None:
+    assert extract_state_abbreviation("Shenandoah, TX, US") == "TX"
+
+
+def test_extract_state_abbreviation_from_full_state_name() -> None:
+    assert extract_state_abbreviation("Austin, Texas, United States") == "TX"
 
 
 def test_similar_jobs_term_normalizer_allows_two_words() -> None:
@@ -151,6 +161,16 @@ def test_similar_jobs_term_normalizer_allows_two_words() -> None:
 def test_similar_jobs_term_normalizer_unjams_fallback_title_words() -> None:
     normalized = _normalize_similar_jobs_term("softwareengineer", fallback="Software Engineer")
     assert normalized == "software engineer"
+
+
+def test_build_similar_jobs_query_uses_gpt_term_and_state_abbreviation() -> None:
+    query = build_similar_jobs_query("Human Resources", "Shenandoah, TX, US")
+    assert query == "Human Resources TX"
+
+
+def test_build_similar_jobs_url_encodes_job_title_and_state_query() -> None:
+    url = build_similar_jobs_url("Human Resources TX")
+    assert url == "https://jobconnectionsproject.org/?s=Human%20Resources%20TX"
 
 
 def test_navigation_urls_are_not_injected_when_post_has_no_existing_links() -> None:
