@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import sys
 
 from .config import (
@@ -94,8 +95,18 @@ def add_job_arguments(parser: argparse.ArgumentParser) -> None:
 def add_expiration_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--env-file", help="Optional path to a .env file.")
     parser.add_argument("--output", help="Optional path to save the expiration report.")
+    parser.add_argument(
+        "--history-path",
+        help="Optional path to a state/history file used to prioritize the least recently checked posts and preserve prior results.",
+    )
     parser.add_argument("--status", default="draft", help="WordPress post status to inspect.")
     parser.add_argument("--per-page", type=int, default=100, help="Number of WordPress posts to fetch.")
+    parser.add_argument(
+        "--max-posts-to-check",
+        type=int,
+        default=20,
+        help="Maximum number of posts to check per run. Defaults to 20, prioritizing never-checked and least recently checked posts first.",
+    )
     parser.add_argument(
         "--threshold",
         type=float,
@@ -238,13 +249,20 @@ def handle_check_job_expiration_command(args: argparse.Namespace) -> None:
         privatize_invalid=not args.skip_private,
         sleep_seconds=args.sleep_seconds,
         output_path=args.output,
+        history_path=args.history_path,
+        max_posts_to_check=args.max_posts_to_check,
     )
 
     invalid_count = int(report["is_invalid"].sum()) if "is_invalid" in report.columns and report.height else 0
     print(f"Posts checked: {report.height}")
     print(f"Invalid posts found: {invalid_count}")
-    if args.output:
+    same_output_and_history = bool(args.output and args.history_path and Path(args.output) == Path(args.history_path))
+    if same_output_and_history:
+        print(f"Saved expiration report/history to {args.output}")
+    elif args.output:
         print(f"Saved expiration report to {args.output}")
+    if args.history_path and not same_output_and_history:
+        print(f"Saved expiration history to {args.history_path}")
 
 
 def main(argv: list[str] | None = None) -> None:

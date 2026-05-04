@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
+from pathlib import Path
 import polars as pl
 import pytest
 
@@ -14,6 +16,10 @@ from jcp_data_manager.config import (
     load_wordpress_settings,
 )
 from jcp_data_manager.expiration import run_expiration_check
+from jcp_data_manager.expiration import (
+    html_to_readable_text,
+    score_soft_404_probabilities,
+)
 from jcp_data_manager.jobs import (
     build_wordpress_post_meta,
     build_similar_jobs_query,
@@ -326,6 +332,38 @@ def test_cli_parser_accepts_clean_json_data_command() -> None:
     assert args.sessions == "sessions.json"
 
 
+def test_cli_parser_accepts_expiration_history_path() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "check-job-expiration",
+            "--status",
+            "publish",
+            "--history-path",
+            "expiration-history.json",
+        ]
+    )
+
+    assert args.command == "check-job-expiration"
+    assert args.history_path == "expiration-history.json"
+
+
+def test_cli_parser_accepts_expiration_max_posts_to_check() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "check-job-expiration",
+            "--status",
+            "publish",
+            "--max-posts-to-check",
+            "12",
+        ]
+    )
+
+    assert args.command == "check-job-expiration"
+    assert args.max_posts_to_check == 12
+
+
 def test_top_level_help_lists_commands_and_command_help_hint(capsys) -> None:
     parser = build_parser()
 
@@ -384,3 +422,404 @@ def test_run_expiration_check_adds_probabilities_before_is_invalid(monkeypatch) 
     assert "is_invalid" in report.columns
     assert report["prob_soft_404"].to_list() == [0.25]
     assert report["is_invalid"].to_list() == [0]
+
+
+def test_html_to_readable_text_removes_hidden_clutter_and_truncates() -> None:
+    html = """
+    <html>
+      <head>
+        <style>.hidden { display: none; }</style>
+        <script>console.log("ignore me")</script>
+      </head>
+      <body>
+        <header>Site Header</header>
+        <nav>Main Nav</nav>
+        <main>
+          <h1>Software Engineer</h1>
+          <p>Apply now for this role.</p>
+        </main>
+        <footer>Footer links</footer>
+      </body>
+    </html>
+    """
+
+    readable = html_to_readable_text(html, max_chars=30)
+
+    assert "console.log" not in readable
+    assert "Site Header" not in readable
+    assert "Main Nav" not in readable
+    assert "Footer links" not in readable
+    assert readable == "Software Engineer Apply now fo"
+
+
+def test_score_soft_404_probabilities_batches_ambiguous_pages_once(monkeypatch) -> None:
+    batch_calls: list[list[dict[str, object]]] = []
+
+    def fake_batch(records, settings):
+        batch_calls.append(records)
+        return {
+            records[0]["index"]: 0.2,
+            records[1]["index"]: 0.8,
+        }
+
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration._gemini_batch_score_soft_404_probabilities",
+        fake_batch,
+    )
+
+    probabilities = score_soft_404_probabilities(
+        [
+            {
+                "index": 0,
+                "title": "First role",
+                "direct_url": "https://example.com/1",
+                "response_code": 200,
+                "readable_text": "Careers page with some neutral text only.",
+            },
+            {
+                "index": 1,
+                "title": "Second role",
+                "direct_url": "https://example.com/2",
+                "response_code": 200,
+                "readable_text": "Another careers page with neutral language only.",
+            },
+            {
+                "index": 2,
+                "title": "Expired role",
+                "direct_url": "https://example.com/3",
+                "response_code": 200,
+                "readable_text": "This posting is no longer available.",
+            },
+            {
+                "index": 3,
+                "title": "Missing role",
+                "direct_url": "https://example.com/4",
+                "response_code": 404,
+                "readable_text": "",
+            },
+        ],
+        GeminiSettings(api_key="gemini-token", model="gemini-2.5-flash-lite"),
+    )
+
+    assert len(batch_calls) == 1
+    assert [record["index"] for record in batch_calls[0]] == [0, 1]
+    assert probabilities == [0.2, 0.8, 0.98, 1.0]
+
+
+def test_score_soft_404_probabilities_falls_back_on_gemini_error(monkeypatch) -> None:
+    def fake_batch(records, settings):
+        raise RuntimeError("429 RESOURCE_EXHAUSTED retry_delay 38")
+
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration._gemini_batch_score_soft_404_probabilities",
+        fake_batch,
+    )
+
+    probabilities = score_soft_404_probabilities(
+        [
+            {
+                "index": 0,
+                "title": "Ambiguous role",
+                "direct_url": "https://example.com/1",
+                "response_code": 200,
+                "readable_text": "Neutral content that needs model review.",
+            }
+        ],
+        GeminiSettings(api_key="gemini-token", model="gemini-2.5-flash-lite"),
+    )
+
+    assert probabilities == [0.5]
+
+
+def test_score_soft_404_probabilities_treats_redirect_statuses_as_soft_404_candidates(monkeypatch) -> None:
+    batch_calls: list[list[dict[str, object]]] = []
+
+    def fake_batch(records, settings):
+        batch_calls.append(records)
+        return {record["index"]: 0.2 + (0.1 * idx) for idx, record in enumerate(records)}
+
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration._gemini_batch_score_soft_404_probabilities",
+        fake_batch,
+    )
+
+    probabilities = score_soft_404_probabilities(
+        [
+            {
+                "index": 0,
+                "title": "Redirected role one",
+                "direct_url": "https://example.com/1",
+                "response_code": 301,
+                "readable_text": "Some neutral careers content after redirect.",
+            },
+            {
+                "index": 1,
+                "title": "Redirected role two",
+                "direct_url": "https://example.com/2",
+                "response_code": 302,
+                "readable_text": "Another neutral careers page after redirect.",
+            },
+            {
+                "index": 2,
+                "title": "Redirected role three",
+                "direct_url": "https://example.com/3",
+                "response_code": 303,
+                "readable_text": "Third neutral careers page after redirect.",
+            },
+            {
+                "index": 3,
+                "title": "Redirected role four",
+                "direct_url": "https://example.com/4",
+                "response_code": 307,
+                "readable_text": "Fourth neutral careers page after redirect.",
+            },
+            {
+                "index": 4,
+                "title": "Redirected role five",
+                "direct_url": "https://example.com/5",
+                "response_code": 308,
+                "readable_text": "Fifth neutral careers page after redirect.",
+            },
+        ],
+        GeminiSettings(api_key="gemini-token", model="gemini-2.5-flash-lite"),
+    )
+
+    assert len(batch_calls) == 1
+    assert [record["response_code"] for record in batch_calls[0]] == [301, 302, 303, 307, 308]
+    assert probabilities == pytest.approx([0.2, 0.3, 0.4, 0.5, 0.6])
+
+
+def test_run_expiration_check_does_not_auto_invalidate_302_when_probability_is_low(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration.fetch_wordpress_posts",
+        lambda settings, status="draft", per_page=100: [
+            {"id": 101, "meta": {"footnotes": "https://example.com/job"}, "title": {"rendered": "Example role"}},
+        ],
+    )
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration.fetch_footnote_metadata",
+        lambda df: df.with_columns(
+            pl.Series("response_code", [302]),
+            pl.Series("direct_url_html", ["<html>redirected job content</html>"]),
+            pl.Series("request_error", [None]),
+        ),
+    )
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration.score_soft_404_probabilities",
+        lambda records, settings: [0.25],
+    )
+
+    report = run_expiration_check(
+        wordpress_settings=WordPressSettings(
+            base_url="https://example.com",
+            username="user1",
+            app_password="pass1",
+            featured_media_id=1807,
+        ),
+        gemini_settings=GeminiSettings(
+            api_key="gemini-token",
+            model="gemini-2.5-flash-lite",
+        ),
+        privatize_invalid=False,
+    )
+
+    assert report["response_code"].to_list() == [302]
+    assert report["prob_soft_404"].to_list() == [0.25]
+    assert report["is_invalid"].to_list() == [0]
+
+
+def test_run_expiration_check_uses_history_to_prioritize_oldest_and_preserve_privatized_rows(
+    monkeypatch,
+) -> None:
+    history_df = pl.DataFrame(
+        [
+            {
+                "post_id": 1,
+                "title": "Older checked role",
+                "footnote": "https://example.com/1",
+                "checked_status": "publish",
+                "checked_at": "2026-05-01T00:00:00+00:00",
+                "response_code": 200,
+                "request_error": None,
+                "prob_soft_404": 0.2,
+                "is_invalid": 0,
+                "is_valid": 1,
+                "was_privatized": 0,
+                "private_status_code": None,
+                "private_error": None,
+            },
+            {
+                "post_id": 2,
+                "title": "Recently checked role",
+                "footnote": "https://example.com/2",
+                "checked_status": "publish",
+                "checked_at": "2026-05-04T00:00:00+00:00",
+                "response_code": 200,
+                "request_error": None,
+                "prob_soft_404": 0.1,
+                "is_invalid": 0,
+                "is_valid": 1,
+                "was_privatized": 0,
+                "private_status_code": None,
+                "private_error": None,
+            },
+            {
+                "post_id": 4,
+                "title": "Privatized role",
+                "footnote": "https://example.com/4",
+                "checked_status": "publish",
+                "checked_at": "2026-05-02T00:00:00+00:00",
+                "response_code": 404,
+                "request_error": None,
+                "prob_soft_404": 1.0,
+                "is_invalid": 1,
+                "is_valid": 0,
+                "was_privatized": 1,
+                "private_status_code": 200,
+                "private_error": None,
+            },
+        ]
+    )
+    written_frames: dict[str, pl.DataFrame] = {}
+
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration.load_expiration_history",
+        lambda path: history_df,
+    )
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration.write_dataframe",
+        lambda df, path: written_frames.__setitem__(str(path), df),
+    )
+
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration.fetch_wordpress_posts",
+        lambda settings, status="publish", per_page=100: [
+            {"id": 1, "title": {"rendered": "Older checked role"}, "meta": {"footnotes": "https://example.com/1"}},
+            {"id": 2, "title": {"rendered": "Recently checked role"}, "meta": {"footnotes": "https://example.com/2"}},
+            {"id": 3, "title": {"rendered": "Never checked role"}, "meta": {"footnotes": "https://example.com/3"}},
+            {"id": 4, "title": {"rendered": "Privatized role"}, "meta": {"footnotes": "https://example.com/4"}},
+        ],
+    )
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration.fetch_footnote_metadata",
+        lambda df: df.with_columns(
+            pl.Series("response_code", [200] * df.height),
+            pl.Series("direct_url_html", ["<html>active job content</html>"] * df.height),
+            pl.Series("request_error", [None] * df.height),
+        ),
+    )
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration.score_soft_404_probabilities",
+        lambda records, settings: [0.1] * len(records),
+    )
+
+    report = run_expiration_check(
+        wordpress_settings=WordPressSettings(
+            base_url="https://example.com",
+            username="user1",
+            app_password="pass1",
+            featured_media_id=1807,
+        ),
+        gemini_settings=GeminiSettings(
+            api_key="gemini-token",
+            model="gemini-2.5-flash-lite",
+        ),
+        status="publish",
+        privatize_invalid=False,
+        history_path="expiration-history.json",
+        max_posts_to_check=2,
+    )
+
+    assert report["post_id"].to_list() == [3, 1]
+    assert "checked_at" in report.columns
+    assert "is_valid" in report.columns
+    assert report["is_invalid"].to_list() == [0, 0]
+
+    updated_history = written_frames["expiration-history.json"]
+    assert sorted(updated_history["post_id"].to_list()) == [1, 2, 3, 4]
+
+    never_checked_row = updated_history.filter(pl.col("post_id") == 3).row(0, named=True)
+    older_checked_row = updated_history.filter(pl.col("post_id") == 1).row(0, named=True)
+    recent_row = updated_history.filter(pl.col("post_id") == 2).row(0, named=True)
+    privatized_row = updated_history.filter(pl.col("post_id") == 4).row(0, named=True)
+
+    assert never_checked_row["checked_status"] == "publish"
+    assert never_checked_row["is_valid"] == 1
+    assert older_checked_row["checked_at"] != "2026-05-01T00:00:00+00:00"
+    assert recent_row["checked_at"] == "2026-05-04T00:00:00+00:00"
+    assert privatized_row["was_privatized"] == 1
+
+
+def test_run_expiration_check_allows_output_and_history_to_share_one_path(monkeypatch) -> None:
+    history_df = pl.DataFrame(
+        [
+            {
+                "post_id": 1,
+                "title": "Existing role",
+                "footnote": "https://example.com/1",
+                "checked_status": "publish",
+                "checked_at": "2026-05-01T00:00:00+00:00",
+                "response_code": 200,
+                "request_error": None,
+                "prob_soft_404": 0.1,
+                "is_invalid": 0,
+                "is_valid": 1,
+                "was_privatized": 0,
+                "private_status_code": None,
+                "private_error": None,
+            }
+        ]
+    )
+    writes: list[tuple[str, pl.DataFrame]] = []
+
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration.load_expiration_history",
+        lambda path: history_df,
+    )
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration.write_dataframe",
+        lambda df, path: writes.append((str(path), df)),
+    )
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration.fetch_wordpress_posts",
+        lambda settings, status="publish", per_page=100: [
+            {"id": 1, "title": {"rendered": "Existing role"}, "meta": {"footnotes": "https://example.com/1"}},
+            {"id": 2, "title": {"rendered": "New role"}, "meta": {"footnotes": "https://example.com/2"}},
+        ],
+    )
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration.fetch_footnote_metadata",
+        lambda df: df.with_columns(
+            pl.Series("response_code", [200] * df.height),
+            pl.Series("direct_url_html", ["<html>active job content</html>"] * df.height),
+            pl.Series("request_error", [None] * df.height),
+        ),
+    )
+    monkeypatch.setattr(
+        "jcp_data_manager.expiration.score_soft_404_probabilities",
+        lambda records, settings: [0.1] * len(records),
+    )
+
+    report = run_expiration_check(
+        wordpress_settings=WordPressSettings(
+            base_url="https://example.com",
+            username="user1",
+            app_password="pass1",
+            featured_media_id=1807,
+        ),
+        gemini_settings=GeminiSettings(
+            api_key="gemini-token",
+            model="gemini-2.5-flash-lite",
+        ),
+        status="publish",
+        privatize_invalid=False,
+        history_path="expiration-state.json",
+        output_path="expiration-state.json",
+        max_posts_to_check=2,
+    )
+
+    assert report["post_id"].to_list() == [2, 1]
+    assert len(writes) == 1
+    assert writes[0][0] == "expiration-state.json"
+    assert sorted(writes[0][1]["post_id"].to_list()) == [1, 2]
+    assert "checked_at" in writes[0][1].columns

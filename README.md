@@ -105,10 +105,14 @@ Lastly, use the `--skip-post` flag which skips the posting step. Use this flag i
 This command inspects WordPress posts, fetches each footnote URL, asks Gemini for a soft-404 probability, and by default changes invalid posts to `private`.
 
 ```bash
-jcp-data-manager check-job-expiration --status draft --output invalid-posts.csv
+jcp-data-manager check-job-expiration --status publish --history-path .\expiration-state.json `--output .\expiration-state.json `
 ```
 
 Use `--skip-private` if you want the report without updating WordPress post status.
+
+The `--history-path` flag is used to specify where the location of the state file where post-check history is stored. Users can specify the `--output` path as the same path as the history, this will cause the history to be updated.
+
+The `--max-posts-to-check` flag works as a limit for how many posts to check for expiring job ads. The default is 20.
 
 
 ## Setting up Dev Repo
