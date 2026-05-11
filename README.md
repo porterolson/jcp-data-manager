@@ -176,6 +176,7 @@ Next goto `https://github.com/marketplace/models/azure-openai/gpt-4-1-mini`
 Click on "Use This Model"
 <img width="1917" height="937" alt="image" src="https://github.com/porterolson/jcp-data-manager/blob/main/imgs/use-this-model.png" />
 
+
 Click "Create Personal Access Token"
 <img width="765" height="284" alt="image" src="https://github.com/porterolson/jcp-data-manager/blob/main/imgs/personal-access-token.png" />
 
@@ -194,7 +195,10 @@ _Also, Google may change access to their older models as well; if so change `GEM
 First, goto `https://ai.google.dev/gemini-api/docs`
 
 Click "Get API Key"
+
 <img width="1915" height="836" alt="image" src="https://github.com/porterolson/jcp-data-manager/blob/main/imgs/api-key-gemeni.png">
+
+
 Sign in to your google account.
 
 Click on this:
