@@ -155,7 +155,7 @@ Once you have an account and are an admin, goto `https://jobconnectionsproject.o
 On the side menu goto `Users → Profile`
 
 Scroll down to the bottom until you see this:
-<img width="1698" height="571" alt="image" src="https://github.com/user-attachments/assets/608db582-e5c7-4ddd-ab67-e916b5366a48" />
+<img width="1698" height="571" alt="image" src="https://github.com/porterolson/jcp-data-manager/blob/main/imgs/wp-stuff.png" />
 
 Enter a new name for you application password (NOTE: this is not your username).
 
@@ -174,10 +174,10 @@ First, sttart by creating a GitHub account.
 Next goto `https://github.com/marketplace/models/azure-openai/gpt-4-1-mini`
 
 Click on "Use This Model"
-<img width="1917" height="937" alt="image" src="https://github.com/user-attachments/assets/b7e43b14-6883-4565-9160-c9d2555f6aa5" />
+<img width="1917" height="937" alt="image" src="https://github.com/porterolson/jcp-data-manager/blob/main/imgs/use-this-model.png" />
 
 Click "Create Personal Access Token"
-<img width="765" height="284" alt="image" src="https://github.com/user-attachments/assets/75ecf9e1-1f10-4bc7-9a44-a14567108381" />
+<img width="765" height="284" alt="image" src="https://github.com/porterolson/jcp-data-manager/blob/main/imgs/personal-access-token.png" />
 
 Leave all the settings at their default and pick an expiration date (your token will no longer work after this date), and then click `Generate Token` at the bottom of the page. This is your `GITHUB_MODELS_TOKEN`
 
@@ -194,12 +194,11 @@ _Also, Google may change access to their older models as well; if so change `GEM
 First, goto `https://ai.google.dev/gemini-api/docs`
 
 Click "Get API Key"
-<img width="1915" height="836" alt="image" src="https://github.com/user-attachments/assets/442ce9ea-15a4-4d74-a417-c4e3344f695d" />
-
+<img width="1915" height="836" alt="image" src="https://github.com/porterolson/jcp-data-manager/blob/main/imgs/api-key-gemeni.png
 Sign in to your google account.
 
 Click on this:
-<img width="1918" height="515" alt="image" src="https://github.com/user-attachments/assets/e2777b93-855b-4e93-a204-3a8c7efbd410" />
+<img width="1918" height="515" alt="image" src="https://github.com/porterolson/jcp-data-manager/blob/main/imgs/gemeni-api-key-locatin.png" />
 
 
 You are now ready to use Gemeni in your code!
