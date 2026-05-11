@@ -194,7 +194,7 @@ _Also, Google may change access to their older models as well; if so change `GEM
 First, goto `https://ai.google.dev/gemini-api/docs`
 
 Click "Get API Key"
-<img width="1915" height="836" alt="image" src="https://github.com/porterolson/jcp-data-manager/blob/main/imgs/api-key-gemeni.png"
+<img width="1915" height="836" alt="image" src="https://github.com/porterolson/jcp-data-manager/blob/main/imgs/api-key-gemeni.png">
 Sign in to your google account.
 
 Click on this:
