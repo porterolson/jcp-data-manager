@@ -2,13 +2,17 @@
 
 CLI toolkit for JCP data cleaning, job posting, and job expiration checks.
 
+
+## jcp-data-manager example usage jupyter notebook:
+[Example Jupyter Notebook](https://colab.research.google.com/drive/1Yn3HqDvnk4gc9Ype6TufdMNEng78nqlG?usp=sharing)
+
+
 ## What it does
 
 - Takes JCP data and cleans (only slightly) the JSON export
 - By default, for signed in users, runs name and facial analysis to get demographic data
 - Auto-posts to WordPress
 - Checks existing WordPress drafts for dead or soft-404 source links and can move invalid posts to private
-
 
 
 ## Usage
