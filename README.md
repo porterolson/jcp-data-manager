@@ -191,7 +191,7 @@ _NOTE: As of making this Google's models have much higher input token limit, so 
 _Also, Google may change access to their older models as well; if so change `GEMINI_MODEL` to a newer model_
 
 
-First, goto https://ai.google.dev/gemini-api/docs
+First, goto `https://ai.google.dev/gemini-api/docs`
 
 Click "Get API Key"
 <img width="1915" height="836" alt="image" src="https://github.com/user-attachments/assets/442ce9ea-15a4-4d74-a417-c4e3344f695d" />
